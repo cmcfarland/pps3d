@@ -1,7 +1,9 @@
 /*
  * References: 
 https://discourse.processing.org/t/camera-rotation-in-3d-using-mouse/20563 
-https://processing.org/examples/orthographic.html
+https://forum.processing.org/two/discussion/1747/reading-filesnames-from-a-folder 
+https://docs.oracle.com/javase/7/docs/api/java/io/File.html
+https://processing.org/examples/orthographic.html 
 https://www.local-guru.net/blog/2019/1/22/processing-sound-visualizer-explained 
 https://www.local-guru.net/ebook/processing-ebook-beta2.pdf
 http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.11.9150 
@@ -9,25 +11,29 @@ http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.11.9150
 import ddf.minim.*;
 import ddf.minim.spi.*;
 import ddf.minim.analysis.FFT;
-import processing.pdf.*;
+//import processing.pdf.*;
+import java.io.File;
 
 Minim minim;
 AudioPlayer player;
 AudioMetaData meta;
-AudioStream in;
-MultiChannelBuffer sb;
+//AudioStream in;
+//MultiChannelBuffer sb;
 
 int grid = 100;
 PVector bpos = new PVector();
 float bsize = grid;
-//float bspeedX, bspeedY, bspeedZ;
-//boolean input1, input2, input3, input4;
 float cameraRotateX;
 float cameraRotateY;
 float cameraSpeed;
 int gridCount = 20;
-PVector pos, speed;
+
+/* inherited from source
+PVector posn, speed;
+float bspeedX, bspeedY, bspeedZ;
+boolean input1, input2, input3, input4;
 float accelMag;
+*/
 
 int B;           // player buffer size, typically 1024 (samples/cycle)
 int D;           // log2(B)
@@ -37,70 +43,77 @@ float S;         // sample rate = 41000 Hz (samples/second)
 float T;         // Nyquist sample rate = 2048/41000 = 0.25 (seconds/cycle) = 1/(2Fc)
 float Fc;        // Nyquist frequency = 1/(4T) ~= 10 Hz @ HIGH-RES, otherwise = 1/(2T)
 
-// relative path to music files
-String fn = ".\\samples\\";
-int track = 0;
-int maxTr;
+// expects a subfolder called 'samples' containing mp3 or wav files
+// defaults to looking in a subfolder called 'data', hence the '..'
+String samplePath = "..\\samples";
+File sampleFolder; 
+String[] samples;
+int track = 0;     // current track being loaded / played
+int maxTrack = 0;
 String[] tracks;
 int frameRt = 30;  // # of frames per second to render (24/30)
 float zoom = 1.0;
+cmWin wd;          // windows for rendered audio/frequency data
 
 boolean PERSPC = false;
 boolean BOX_ON = true;
 boolean GRD_ON = true;
-boolean AUD_ON = true;
+boolean AUD_ON = false;
 boolean LOGSCL = false;
 
-// define windows to display rendered audio/frequency data
-cmWin wd; 
-// built-in FFT library for error checking
-//FFT fftLib; 
+// Global audio data
+//FFT fftLib;      // built-in FFT library for error checking
 float[] LnR;
 float[] Lbuf;
 float[] Rbuf;
-float levL = 0.0;
-float levR = 0.0; 
+float[] level;
+int pos, len;
 
 void setup()
 {
-  minim = new Minim(this);
-  maxTr = 10;
-  tracks = new String[maxTr]; // 10
-  tracks[0] = "So_Easy.mp3";
-  tracks[1] = "Poor_Leno.mp3";
-  tracks[2] = "Shivering_Black.mp3";
-  tracks[3] = "Lost_On_You.mp3";
-  tracks[4] = "Nest_Of_Ravens.mp3";
-  tracks[5] = "You_Are_Nature.mp3";
-  tracks[6] = "Joanna.mp3";
-  tracks[7] = "Cemetery_Beach.mp3";
-  tracks[8] = "Into_The_Void.mp3";
-  tracks[9] = "Cyclone.mp3"; //"Mirror_Messiah.mp3"; BUGS OUT
-  //tracks[10] = "Frozen_Leaves.wav"; // bugs in minim when playing files @ 32kHz SR
+  // bugs in minim when playing files @ 32kHz sample rate
+  minim = new Minim(this); 
+  sampleFolder = new File(dataPath(samplePath));
+  samples = sampleFolder.list(); 
+  if (samples != null) {
+    maxTrack = samples.length;
+  } 
+  if (maxTrack == 0) {
+    println("no tracks in ", dataPath(samplePath));
+    stop();
+  }
+  tracks = new String[maxTrack];
   
-  // set default N-value, initialize windows class
+  for (int i=0; i<maxTrack; i++){
+    println(samples[i]);
+    tracks[i] = samples[i];
+  }
+  
+  // sets default N-value, initializes windows, starts minim player
   nextTrack(0);  
-  // store audio data between frames for 3D inspection
+  // store audio data between frames for pausing & inspection
   Lbuf = new float[N];
   Rbuf = new float[N];
   LnR = new float[N]; 
+  level = new float[2];
   
   //fullScreen(P3D);
   size(1920, 1080, P3D); 
   frameRate(frameRt);
   cameraSpeed = TWO_PI / width * 2;
-  //cameraRotateY = -PI/6;
+  cursor(CROSS);
+  
+  /* inherited from source
   pos = new PVector();
   speed = new PVector();
   accelMag = 2;
-  cursor(CROSS);
+  */
 }
 
 void draw()
 {
   lights();
-  float far = bsize*gridCount*16; //map(mouseX, 0, width, 780, 3600);
-  //float zoom = map(mouseY, 0, height, 0, camZ*2);
+  float far = bsize*gridCount*16; 
   if (PERSPC == true) {
     perspective(PI/2.0, float(width)/float(height), 10.0, far);
   } else {
@@ -111,7 +124,8 @@ void draw()
   rotateX(-cameraRotateY);
   rotateY(-cameraRotateX);
   background(0);
-  /*
+  
+  /* inherited from source
   // little box previews motion
   pushMatrix();
   translate(bpos.x, height/2 + bpos.y, bpos.z);
@@ -120,31 +134,17 @@ void draw()
   rotateY(atan2(speed.x, speed.y));
   box(bsize);
   popMatrix();
-  */
   PVector accel = getMovementDir().rotate(cameraRotateX).mult(accelMag);
   speed.add(accel);
   pos.add(speed);
-  speed.mult(0.9);     
+  speed.mult(0.9);  
+  */
   
-  // update buffer data when song is playing
-  int posn = player.position();
-  int len = player.length();
-  float levL = 0.0;
-  float levR = 0.0; 
-  if ( player.isPlaying() ) {
-    levL = player.left.level();
-    levR = player.right.level();
-    float left[] = player.left.toArray();
-    float right[] = player.right.toArray();
-    arrayCopy(right, 0, Rbuf, 0, N); 
-    arrayCopy(left,  0, Lbuf, 0, N); 
-    for (int i=0; i < N; i++) {
-      LnR[i] = left[i] + right[i];
-    }  
-  } 
-  // keep eye on center of PPS at all times
-  //translate(0, bsize/2-height/2); //
-  color c = color(75,150);
+  // update data buffer when song is playing
+  //if ( player.isPlaying() ) {
+  updateAudio();
+  //}
+  color c = color(75,150);  // 50% transparent grey
   if (BOX_ON) {
     noFill();
     stroke(c);
@@ -156,26 +156,24 @@ void draw()
   } else {
     noCursor();
   }
-  if (AUD_ON) {
-    wd.drawAudioLevels(levL, levR, posn, len);
+  if (AUD_ON && player.isPlaying()) {  // under construction
+    wd.drawAudioLevels(level[1], level[0], pos, len);
   }
-  //wd.displayCmds(track, meta.title());
-  // enable pausing mid-song to freeze waveforms on screen
-  // if paused, re-draw existing buffers to account for moving camera
+  // try to align PPS plane with orthogonal viewing box
   pushMatrix();
-  // try to align PPS plane with diagonal corners of viewing box
   rotateX(PI/4.0);
   //rotateY(PI/4.0);
   rotateZ(PI/4.0);
   wd.drawPPSData(Lbuf, Rbuf, LnR);  
   popMatrix();
-  
 }
 
 void updateAudio() {
+  pos = player.position();
+  len = player.length();
   if ( player.isPlaying() ) {
-    levL = player.left.level();
-    levR = player.right.level();
+    level[1] = player.left.level();
+    level[0] = player.right.level();
     float left[] = player.left.toArray();
     float right[] = player.right.toArray();
     arrayCopy(right, 0, Rbuf, 0, N); 
@@ -183,12 +181,15 @@ void updateAudio() {
     for (int i=0; i < N; i++) {
       LnR[i] = left[i] + right[i];
     }  
-  } 
+  } else if (pos == len) {
+    println(tracks[track+1], meta.title(), B, int(S), "Hz"); //int(Fc),    
+    nextTrack(track+1); // if @ EOF, load next track
+  }
 }
 
 void mouseWheel(MouseEvent event) {
   float e = event.getCount(); // +/- 1.0
-  zoom = min(max(0.2, zoom + 0.05*e),1.0);
+  zoom = min(max(0.2, zoom + 0.05*e),2.0);
   println("zoom: " + zoom);
 }
 
@@ -292,9 +293,6 @@ void keyPressed()
       player.pause();
     } else { 
       print("PLAY\n"); 
-      if ( player.position() == player.length() ) {
-        nextTrack(track+1); // if @ EOF, load next track
-      }
       player.play();
     }
     break;
@@ -384,11 +382,11 @@ void nextTrack(int _tr) {
   int tr = _tr;
   if ((meta == null) || (player == null) || (tr != track)) {
     if (tr < 0) {
-      tr=maxTr-1;
-    } else if ((tr >= maxTr)) {
+      tr=maxTrack-1;
+    } else if ((tr >= maxTrack)) {
       tr=0;
     }
-    String txt = fn+tracks[tr];
+    String txt = sampleFolder+"\\"+samples[tr];
     println(txt); 
     player = minim.loadFile(txt);
     meta = player.getMetaData();
@@ -415,10 +413,11 @@ void setNSB(int _N, float _S, int _B)
 }
 
 void stop() {
-  if (in != null) {
+  /*if (in != null) {
     in.close();
-  }
+  }*/
   if (player != null) {
   player.close();
   }
+  exit();
 }
