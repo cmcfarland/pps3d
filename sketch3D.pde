@@ -4,116 +4,112 @@ https://discourse.processing.org/t/camera-rotation-in-3d-using-mouse/20563
 https://forum.processing.org/two/discussion/1747/reading-filesnames-from-a-folder 
 https://docs.oracle.com/javase/7/docs/api/java/io/File.html
 https://processing.org/examples/orthographic.html 
-https://www.local-guru.net/blog/2019/1/22/processing-sound-visualizer-explained 
-https://www.local-guru.net/ebook/processing-ebook-beta2.pdf
-http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.11.9150 
+http://code.compartmental.net/minim/audiolistener_audiolistener.html
 */
 import ddf.minim.*;
-import ddf.minim.spi.*;
-import ddf.minim.analysis.FFT;
-//import processing.pdf.*;
-import java.io.File;
+import ddf.minim.spi.*; // for AudioStream
+import java.io.File;    // for scanning samples directory
+import org.gamecontrolplus.*;
 
+ControlIO control; 
+ControlDevice conn3d;
 Minim minim;
 AudioPlayer player;
 AudioMetaData meta;
-//AudioStream in;
-//MultiChannelBuffer sb;
-
-int grid = 100;
-PVector bpos = new PVector();
-float bsize = grid;
-float cameraRotateX;
-float cameraRotateY;
-float cameraSpeed;
-int gridCount = 20;
-
-/* inherited from source
-PVector posn, speed;
-float bspeedX, bspeedY, bspeedZ;
-boolean input1, input2, input3, input4;
-float accelMag;
-*/
-
-int B;           // player buffer size, typically 1024 (samples/cycle)
-int D;           // log2(B)
-int N;           // some fraction of buffer size <= 1024 (samples/cycle)
-int M;           // log2(N)
-float S;         // sample rate = 41000 Hz (samples/second)
-float T;         // Nyquist sample rate = 2048/41000 = 0.25 (seconds/cycle) = 1/(2Fc)
-float Fc;        // Nyquist frequency = 1/(4T) ~= 10 Hz @ HIGH-RES, otherwise = 1/(2T)
-
+AudioStream stream; // reads from input source of soundcard (set in Control Panel)
+//AudioSource source;
+//AudioOut    output;
+AudioInput  input;  // wrapper for AudioStream, needed for addListener
+renderAudio render; // defines windows for rendered audio/frequency data
+updateAudio update; // audio listener class implementation
 // expects a subfolder called 'samples' containing mp3 or wav files
 // defaults to looking in a subfolder called 'data', hence the '..'
 String samplePath = "..\\samples";
 File sampleFolder; 
 String[] samples;
-int track = 0;     // current track being loaded / played
-int maxTrack = 0;
-String[] tracks;
-int frameRt = 30;  // # of frames per second to render (24/30)
-float zoom = 1.0;
-cmWin wd;          // windows for rendered audio/frequency data
+int track = 0;      // current track being loaded / played
+int maxTrack = 0;   // default until directory scanned
+int B;           // player buffer size, typically 1024 (samples/cycle)
+int D;           // log2(B)
+int N;           // some fraction of buffer size <= B
+int M;           // log2(N)
+float S;         // sample rate, typically 41000 Hz (samples/second)
+float T;         // Nyquist sample rate = 2048/41000 = 0.25 (seconds/cycle) = 1/(2Fc)
+float Fc;        // Nyquist frequency = 1/(4T) ~= 10 Hz @ HIGH-RES, otherwise = 1/(2T)
 
+int grid = 80;
+int gridCount = 20;
+float bsize = grid;
+float cameraRotateX;
+float cameraRotateY;
+float cameraSpeed;
+int frameRt = 30;   // # of frames per second to render (24/30)
+float zoom = 1.0;
+
+boolean PAUSED = false;
 boolean PERSPC = false;
 boolean BOX_ON = true;
 boolean GRD_ON = true;
-boolean AUD_ON = false;
+boolean AUD_ON = true;
 boolean LOGSCL = false;
+boolean STREAM = false;
 
-// Global audio data
-//FFT fftLib;      // built-in FFT library for error checking
-float[] LnR;
-float[] Lbuf;
-float[] Rbuf;
-float[] level;
-int pos, len;
+class updateAudio implements AudioListener {
+  private float[] left;
+  private float[] right;
+  
+  updateAudio() {
+    left = null; 
+    right = null;
+  }
+  // store last available audio data for pausing & inspection
+  public synchronized void samples(float[] sampL, float[] sampR) {
+    if (PAUSED == false) {
+      left = sampL;
+      right = sampR;    
+    }  
+  }
+  public synchronized void samples(float[] samp) {
+    if (PAUSED == false) {
+      left = samp;  
+    }  
+  }
+  synchronized void draw() {
+    if (AUD_ON) {
+      // try to align PPS planes with orthogonal viewing box
+      pushMatrix();
+      rotateX(PI/4.0);
+      //rotateY(PI/4.0);
+      rotateZ(PI/4.0);
+      render.drawPPSData(left, right);  
+      popMatrix();
+    } else {
+      // render frequency domain data
+      pushMatrix();
+      render.drawFFTData(left, right, LOGSCL);
+      popMatrix();
+    }
+  } 
+  void reset() {
+    left = null;
+    right = null;
+  }
+}
 
 void setup()
 {
-  // bugs in minim when playing files @ 32kHz sample rate
-  minim = new Minim(this); 
-  sampleFolder = new File(dataPath(samplePath));
-  samples = sampleFolder.list(); 
-  if (samples != null) {
-    maxTrack = samples.length;
-  } 
-  if (maxTrack == 0) {
-    println("no tracks in ", dataPath(samplePath));
-    stop();
-  }
-  tracks = new String[maxTrack];
-  
-  for (int i=0; i<maxTrack; i++){
-    println(samples[i]);
-    tracks[i] = samples[i];
-  }
-  
-  // sets default N-value, initializes windows, starts minim player
-  nextTrack(0);  
-  // store audio data between frames for pausing & inspection
-  Lbuf = new float[N];
-  Rbuf = new float[N];
-  LnR = new float[N]; 
-  level = new float[2];
-  
-  //fullScreen(P3D);
-  size(1920, 1080, P3D); 
+  findAudio();         // look for subdirectory of samples, otherwise use recording source
+  //findJoystick();      // in progress
+  size(960, 540, P3D); //fullScreen(P3D);
   frameRate(frameRt);
   cameraSpeed = TWO_PI / width * 2;
   cursor(CROSS);
-  
-  /* inherited from source
-  pos = new PVector();
-  speed = new PVector();
-  accelMag = 2;
-  */
 }
 
 void draw()
 {
   lights();
-  float far = bsize*gridCount*16; 
+  float far = bsize*gridCount*20; 
   if (PERSPC == true) {
     perspective(PI/2.0, float(width)/float(height), 10.0, far);
   } else {
@@ -125,25 +121,6 @@ void draw()
   rotateY(-cameraRotateX);
   background(0);
   
-  /* inherited from source
-  // little box previews motion
-  pushMatrix();
-  translate(bpos.x, height/2 + bpos.y, bpos.z);
-  stroke(255);
-  noFill();
-  rotateY(atan2(speed.x, speed.y));
-  box(bsize);
-  popMatrix();
-  PVector accel = getMovementDir().rotate(cameraRotateX).mult(accelMag);
-  speed.add(accel);
-  pos.add(speed);
-  speed.mult(0.9);  
-  */
-  
-  // update data buffer when song is playing
-  //if ( player.isPlaying() ) {
-  updateAudio();
-  //}
   color c = color(75,150);  // 50% transparent grey
   if (BOX_ON) {
     noFill();
@@ -151,41 +128,126 @@ void draw()
     box(grid*gridCount); 
   } 
   if (GRD_ON) {
-    wd.drawGrid(gridCount, grid, c);
+    render.drawGrid(gridCount, grid, c);
     cursor(CROSS);
   } else {
     noCursor();
   }
-  if (AUD_ON && player.isPlaying()) {  // under construction
-    wd.drawAudioLevels(level[1], level[0], pos, len);
+  // update player levels & elapsed time when song is playing
+  if ( player != null || input != null) { // (in progress)
+    if ( player.isPlaying() ) {
+      elapsedTime();     // apply auto-scaling
+    }
+    update.draw();
   }
-  // try to align PPS plane with orthogonal viewing box
-  pushMatrix();
-  rotateX(PI/4.0);
-  //rotateY(PI/4.0);
-  rotateZ(PI/4.0);
-  wd.drawPPSData(Lbuf, Rbuf, LnR);  
-  popMatrix();
 }
 
-void updateAudio() {
-  pos = player.position();
-  len = player.length();
-  if ( player.isPlaying() ) {
-    level[1] = player.left.level();
-    level[0] = player.right.level();
-    float left[] = player.left.toArray();
-    float right[] = player.right.toArray();
-    arrayCopy(right, 0, Rbuf, 0, N); 
-    arrayCopy(left,  0, Lbuf, 0, N); 
-    for (int i=0; i < N; i++) {
-      LnR[i] = left[i] + right[i];
-    }  
-  } else if (pos == len) {
-    println(tracks[track+1], meta.title(), B, int(S), "Hz"); //int(Fc),    
-    nextTrack(track+1); // if @ EOF, load next track
+void findAudio() {
+  // bugs in minim when playing files @ 32kHz sample rate
+  minim = new Minim(this); 
+  update = new updateAudio();
+  sampleFolder = new File(dataPath(samplePath));
+  if (sampleFolder != null) {
+    samples = sampleFolder.list(); 
+  }
+  if (samples != null) {
+    maxTrack = samples.length;
+  } 
+  if (maxTrack > 0) {
+    // list all files in sample directory
+    for (int i=0; i<maxTrack; i++){
+      println(samples[i]);
+    } 
+    // sets default N-value, initializes renderer, starts player at track 0
+    loadTrack(0);    
+  } else if (maxTrack == 0) { 
+    // use line in if no files to play
+    println("no tracks in ", dataPath(samplePath), "trying line in..."); 
+    loadStream();
+  } 
+}
+void elapsedTime() {
+  int pos = player.position();
+  int len = player.length();
+  if (pos == len) {
+    //println(samples[track+1], meta.title(), B, int(S), "Hz"); //int(Fc),    
+    loadTrack(track+1); // if @ EOF, load next track
   }
 }
+
+void loadStream() {
+  // delete existing listener, if any
+  if ( player != null && update != null ) {
+    player.removeListener( update );
+  }
+  /*
+  if (stream == null) {
+    // try to open stream, or report error
+    stream = minim.getInputStream(2,1024,44100.0,16);
+  }
+  stream.addListener( update ); // FAIL
+  stream.open();
+  */
+  // delete existing listener, if any
+  if (update != null) {
+    if ( player != null) {
+      //player.close();
+      player.removeListener( update );
+    }
+    if ( input != null) {
+      input.close();
+      input.removeListener( update );
+    }
+    update.reset();
+  }
+  if (input == null) {
+    input = minim.getLineIn();
+  }
+  input.addListener( update );
+  STREAM = (input != null);
+  PAUSED = false;
+  println("STREAM =", STREAM);
+}
+
+void loadTrack(int _tr) {
+  int tr = _tr;
+  // delete existing listener, if any
+  if (update != null) {
+    if ( player != null) {
+      //player.close();
+      player.removeListener( update );
+    }
+    if ( input != null) {
+      input.close();
+      input.removeListener( update );
+    }
+    update.reset();
+  }
+  // start at beginning of playlist and wrap around
+  if ((meta == null) || (player == null) || (tr != track)) {
+    if (tr < 0) {
+      tr=maxTrack-1;
+    } else if ((tr >= maxTrack)) {
+      tr=0;
+    }
+    String txt = sampleFolder+"\\"+samples[tr];
+    println(txt); 
+    player = minim.loadFile(txt);
+    meta = player.getMetaData();
+    B = player.bufferSize();
+    setNSB( B, player.sampleRate(), B );  // bugs when trying to play files @ 32kHz SR
+    if (render == null ) {
+      println("new Audio Renderer"); 
+      render = new renderAudio( width, height, B );
+    }
+    render.setNSB(N,S,B);
+  }
+  println(samples[tr], meta.title(), B, int(S), "Hz"); //int(Fc),
+  track=tr;
+  PAUSED = false;
+  // enable synchronized sample buffering & drawing
+  player.addListener( update );
+}  
 
 void mouseWheel(MouseEvent event) {
   float e = event.getCount(); // +/- 1.0
@@ -209,27 +271,20 @@ void mouseMoved() {
   //cameraRotateY = constrain(cameraRotateY, -HALF_PI, 0);
 }
 
-// not in use, inherited from source 
-boolean wPressed, sPressed, aPressed, dPressed;
-PVector pressedDir = new PVector();
-PVector getMovementDir() {
-  return pressedDir.copy().normalize();
-}
-
 // active hotkeys
 void keyPressed()
 {
   switch(keyCode) {
   case UP:
-    if (wd.tau < wd.ND2) {
-      wd.tau += 1; 
-      println("tau =", wd.tau);
+    if (render.tau < render.ND2) {
+      render.tau += 1; 
+      println("tau =", render.tau);
     } 
     break;
   case DOWN: 
-    if (wd.tau > 1) {
-      wd.tau -= 1; 
-      println("tau =", wd.tau);
+    if (render.tau > 1) {
+      render.tau -= 1; 
+      println("tau =", render.tau);
     } 
     break;
   case LEFT: 
@@ -237,20 +292,20 @@ void keyPressed()
       player.skip(-10000);
     } else if ( player.position() == player.length() ) {
       player.rewind();     // restart song
-      nextTrack(track);    // reset accumulators
+      loadTrack(track);    // reset accumulators
     } else {
-      nextTrack(track-1);  // jump to previous track
+      loadTrack(track-1);  // jump to previous track
     }
     break;
   case RIGHT: 
     if ( player.isPlaying() ) {
       player.skip(10000);  // skip forward 10 seconds
     } else {
-      nextTrack(track+1);  // jump to next track
+      loadTrack(track+1);  // jump to next track
     }
     break;
   case ENTER: 
-    saveFrame(".\\screens\\"+tracks[track]+"_"+player.position()+".png");
+    saveFrame(".\\screens\\"+samples[track]+"_"+player.position()+".png");
     break;
   }
   switch(key) {
@@ -260,7 +315,7 @@ void keyPressed()
     if (N*2 <= B) {
       N *= 2; 
       setNSB(N,S,B);
-      wd.setNSB(N,S,B);
+      render.setNSB(N,S,B);
     } else {
       println("N at max value:", N);
     } 
@@ -268,22 +323,22 @@ void keyPressed()
   case '2':
   stroke(255);
     strokeWeight(1);   
-    if (N == wd.Nmin) {
+    if (N == render.Nmin) {
       println("N at min value:", N); 
     } else {
       N /= 2; 
       setNSB(N,S,B);
-      wd.setNSB(N,S,B);
+      render.setNSB(N,S,B);
     }
     break;
   case '4':
     if ( player.isPlaying() ) {
-      wd.setNFR(false);
+      render.setNFR(false);
     }     
     break;
   case '6':
     if ( player.isPlaying() ) {
-      wd.setNFR(true);
+      render.setNFR(true);
     }     
     break;
   case ' ':
@@ -291,59 +346,46 @@ void keyPressed()
     if ( player.isPlaying() ) {
       print("PAUSE\n"); 
       player.pause();
+      PAUSED = true;
     } else { 
       print("PLAY\n"); 
       player.play();
+      PAUSED = false;
     }
+    println("PAUSED =", PAUSED);
     break;
   // snap to orthogonal views:
   case 'w':
     cameraRotateX = 0;
     cameraRotateY = 0;
-    wPressed = true;
-    pressedDir.y = -1;
     break;
   case 'a':
     cameraRotateX = PI/2.0;
     cameraRotateY = 0;
-    aPressed = true;
-    pressedDir.x = -1;
     break;
   case 's':
     cameraRotateX = 0;
     cameraRotateY = PI/2.0;
-    sPressed = true;
-    pressedDir.y = 1;
     break;
   case 'd':
     cameraRotateX = -PI/2.0;
     cameraRotateY = 0;
-    dPressed = true;
-    pressedDir.x = 1;
     break;
   case 'z':
     cameraRotateX = 0;
     cameraRotateY = -PI/2.0;
-    dPressed = true;
-    pressedDir.x = 1;
     break;
   case 'x':
     cameraRotateX = 0;
     cameraRotateY = PI;
-    dPressed = true;
-    pressedDir.x = 1;
     break;
   case 'q':
     cameraRotateX = PI/4.0;
     cameraRotateY = PI/4.0;
-    dPressed = true;
-    pressedDir.x = 1;
     break;
   case 'e':
     cameraRotateX = PI*3.0/4.0;
     cameraRotateY = PI/4.0;
-    dPressed = true;
-    pressedDir.x = 1;
     break;
   case 'b':
     BOX_ON = !BOX_ON;
@@ -354,53 +396,28 @@ void keyPressed()
   case 'u':
     AUD_ON = !AUD_ON;
     break;
+  case 'l':
+    LOGSCL = !LOGSCL;
+    break;
+  case 't':
+    if (player != null) {
+      player.close(); 
+    }
+    loadStream();
+    break;
+  case 'f':
+    if (input != null) {
+      input.close(); 
+      STREAM = false;
+      println("STREAM =", STREAM);
+    }
+    loadTrack(track);
+    break;
   }
 }
 
-// not in use, inherited from source 
 void keyReleased() {
-  switch(key) {
-  case 'w':
-    wPressed = false;
-    pressedDir.y = sPressed ? 1 : 0;
-    break;
-  case 's':
-    sPressed = false;
-    pressedDir.y = wPressed ? -1 : 0;
-    break;
-  case 'a':
-    aPressed = false;
-    pressedDir.x = dPressed ? 1 : 0;
-    break;
-  case 'd':
-    dPressed = false;
-    pressedDir.x = aPressed ? -1 : 0;
-    break;
-  }
 }
-void nextTrack(int _tr) {
-  int tr = _tr;
-  if ((meta == null) || (player == null) || (tr != track)) {
-    if (tr < 0) {
-      tr=maxTrack-1;
-    } else if ((tr >= maxTrack)) {
-      tr=0;
-    }
-    String txt = sampleFolder+"\\"+samples[tr];
-    println(txt); 
-    player = minim.loadFile(txt);
-    meta = player.getMetaData();
-    B = player.bufferSize();
-    setNSB( B, player.sampleRate(), B );  // bugs when trying to play files @ 32kHz SR
-    if (wd == null ) {
-      println("new cmWin"); 
-      wd = new cmWin( width, height, B);
-    }
-    wd.setNSB(N,S,B);
-    println(tracks[tr], meta.title(), B, int(S), "Hz"); //int(Fc),
-  }
-  track=tr;
-}  
 
 void setNSB(int _N, float _S, int _B) 
 {
@@ -412,10 +429,22 @@ void setNSB(int _N, float _S, int _B)
   T = float(B)/S;
 }
 
+void findJoystick() {
+  /* 3D joystick -- IN PROGRESS */
+  control = ControlIO.getInstance(this);
+  println(control.getDevices());
+  conn3d = control.getDevice("3Dconnexion KMJ Emulator");
+  println(conn3d.getInputs());
+  println(conn3d.getTypeID() + " " + conn3d.getTypeName());
+  String tab = "";
+  println(conn3d.buttonsToText(tab));
+  println(conn3d.slidersToText(tab));  
+}
+
 void stop() {
-  /*if (in != null) {
-    in.close();
-  }*/
+  if (stream != null) {
+    stream.close();
+  }
   if (player != null) {
   player.close();
   }
