@@ -10,18 +10,20 @@ import ddf.minim.*;
 import ddf.minim.spi.*; // for AudioStream
 import java.io.File;    // for scanning samples directory
 import org.gamecontrolplus.*;
+import processing.opengl.PGraphics3D;
 
 ControlIO control; 
 ControlDevice conn3d;
 Minim minim;
 AudioPlayer player;
 AudioMetaData meta;
-AudioStream stream; // reads from input source of soundcard (set in Control Panel)
+//AudioStream stream; // reads from input source of soundcard (set in Control Panel)
 //AudioSource source;
 //AudioOut    output;
-AudioInput  input;  // wrapper for AudioStream, needed for addListener
+//AudioInput  input;  // wrapper for AudioStream, needed for addListener
 renderAudio render; // defines windows for rendered audio/frequency data
 updateAudio update; // audio listener class implementation
+
 // expects a subfolder called 'samples' containing mp3 or wav files
 // defaults to looking in a subfolder called 'data', hence the '..'
 String samplePath = "..\\samples";
@@ -43,7 +45,7 @@ float bsize = grid;
 float cameraRotateX;
 float cameraRotateY;
 float cameraSpeed;
-int frameRt = 30;   // # of frames per second to render (24/30)
+int frameRt = 24;   //# of frames per second to render (24/30)
 float zoom = 1.0;
 
 boolean PAUSED = false;
@@ -53,6 +55,15 @@ boolean GRD_ON = true;
 boolean AUD_ON = true;
 boolean LOGSCL = false;
 boolean STREAM = false;
+boolean FLSCRN = false;
+
+public void settings() {
+  if (FLSCRN) {
+    fullScreen(P3D);
+  } else {
+    size(960, 540, P3D);
+  }
+}
 
 class updateAudio implements AudioListener {
   private float[] left;
@@ -99,8 +110,9 @@ class updateAudio implements AudioListener {
 void setup()
 {
   findAudio();         // look for subdirectory of samples, otherwise use recording source
-  //findJoystick();      // in progress
-  size(960, 540, P3D); //fullScreen(P3D);
+  findJoystick();      // in progress
+  //size(960, 540, P3D); 
+  //fullScreen(P3D);
   frameRate(frameRt);
   cameraSpeed = TWO_PI / width * 2;
   cursor(CROSS);
@@ -134,10 +146,9 @@ void draw()
     noCursor();
   }
   // update player levels & elapsed time when song is playing
-  if ( player != null || input != null) { // (in progress)
-    if ( player.isPlaying() ) {
-      elapsedTime();     // apply auto-scaling
-    }
+  if ( player != null) { // || input != null) { // (in progress)
+    // rewind song if EOF
+    elapsedTime();
     update.draw();
   }
 }
@@ -169,25 +180,28 @@ void findAudio() {
 void elapsedTime() {
   int pos = player.position();
   int len = player.length();
-  if (pos == len) {
-    //println(samples[track+1], meta.title(), B, int(S), "Hz"); //int(Fc),    
-    loadTrack(track+1); // if @ EOF, load next track
+  if (pos == len-1) {
+    println("elapsed", pos, "/", len);
+    player.rewind(); 
+    println("rewind", player.position(), "/", len);
+    //loadTrack(track+1); // if @ EOF, load next track
   }
 }
 
 void loadStream() {
+  /*
   // delete existing listener, if any
   if ( player != null && update != null ) {
     player.removeListener( update );
   }
-  /*
+  
   if (stream == null) {
     // try to open stream, or report error
     stream = minim.getInputStream(2,1024,44100.0,16);
   }
   stream.addListener( update ); // FAIL
   stream.open();
-  */
+  
   // delete existing listener, if any
   if (update != null) {
     if ( player != null) {
@@ -207,6 +221,7 @@ void loadStream() {
   STREAM = (input != null);
   PAUSED = false;
   println("STREAM =", STREAM);
+  */
 }
 
 void loadTrack(int _tr) {
@@ -217,10 +232,12 @@ void loadTrack(int _tr) {
       //player.close();
       player.removeListener( update );
     }
+    /*
     if ( input != null) {
       input.close();
       input.removeListener( update );
     }
+    */
     update.reset();
   }
   // start at beginning of playlist and wrap around
@@ -251,7 +268,8 @@ void loadTrack(int _tr) {
 
 void mouseWheel(MouseEvent event) {
   float e = event.getCount(); // +/- 1.0
-  zoom = min(max(0.2, zoom + 0.05*e),2.0);
+  // zoom: min = 0.05, max = 5, increment = 0.05
+  zoom = min(max(0.05, zoom+0.05*e),5.0);
   println("zoom: " + zoom);
 }
 
@@ -290,11 +308,11 @@ void keyPressed()
   case LEFT: 
     if ( player.isPlaying() ) {
       player.skip(-10000);
-    } else if ( player.position() == player.length() ) {
+    } else if ( player.position() == 0 ) {
+      loadTrack(track-1);  // jump to previous track
+    } else {  
       player.rewind();     // restart song
       loadTrack(track);    // reset accumulators
-    } else {
-      loadTrack(track-1);  // jump to previous track
     }
     break;
   case RIGHT: 
@@ -352,7 +370,7 @@ void keyPressed()
       player.play();
       PAUSED = false;
     }
-    println("PAUSED =", PAUSED);
+    println("PAUSED =", PAUSED, "@", player.position(), "/", player.length());
     break;
   // snap to orthogonal views:
   case 'w':
@@ -399,6 +417,11 @@ void keyPressed()
   case 'l':
     LOGSCL = !LOGSCL;
     break;
+  case 'f':
+    //FLSCRN = !FLSCRN;
+    //settings();
+    break;
+  /*
   case 't':
     if (player != null) {
       player.close(); 
@@ -413,6 +436,7 @@ void keyPressed()
     }
     loadTrack(track);
     break;
+    */
   }
 }
 
@@ -430,8 +454,20 @@ void setNSB(int _N, float _S, int _B)
 }
 
 void findJoystick() {
-  /* 3D joystick -- IN PROGRESS */
+  // 3D joystick -- IN PROGRESS 
   control = ControlIO.getInstance(this);
+  println(control.getDevices());
+  conn3d = control.getDevice("3Dconnexion KMJ Emulator");
+  println(conn3d.getInputs());
+  println(conn3d.getTypeID() + " " + conn3d.getTypeName());
+  String tab = "";
+  println(conn3d.buttonsToText(tab));
+  println(conn3d.slidersToText(tab));  
+}
+void updateJoystick() {
+  // 3D joystick -- IN PROGRESS 
+  //read control devices prior to rendering frame;
+  control.pre(); 
   println(control.getDevices());
   conn3d = control.getDevice("3Dconnexion KMJ Emulator");
   println(conn3d.getInputs());
@@ -442,9 +478,11 @@ void findJoystick() {
 }
 
 void stop() {
+  /*
   if (stream != null) {
     stream.close();
   }
+  */
   if (player != null) {
   player.close();
   }
